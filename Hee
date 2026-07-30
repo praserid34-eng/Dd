@@ -1,0 +1,566 @@
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+
+-- ตาราง Config สำหรับฟังก์ชันหลัก
+local Config = {
+    Aim = false, AimTorso = false, AutoShoot = false,
+    FovRadius = 50,
+    EspBox = false, EspLine = false, EspHealth = false,
+    Fly = false, FlyHeight = 20,
+    NoClip = false, Float = false,
+    WalkSpeed = 16, JumpPower = 50
+}
+
+local TeleportHeight = 3
+local IsFollowing = false
+local TargetPlayer = nil
+local lastShootTime = 0
+local ESPCache = {}
+
+-- ฟังก์ชันสำหรับระบบลากหน้าต่าง/ปุ่ม แบบอิสระเต็มที่
+local function MakeDraggable(frame, dragHandle)
+    local slot = dragHandle or frame
+    local dragging = false
+    local dragInput, dragStart, startPos
+
+    slot.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = frame.Position
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                end
+            end)
+        end
+    end)
+
+    slot.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+            dragInput = input
+        end
+    end)
+
+    UserInputService.InputChanged:Connect(function(input)
+        if input == dragInput and dragging then
+            local delta = input.Position - dragStart
+            frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        end
+    end)
+end
+
+-- สรรสร้างระบบ UI หลัก
+local ScreenGui = Instance.new("ScreenGui", game:GetService("CoreGui"))
+local MainFrame = Instance.new("Frame", ScreenGui)
+local Title = Instance.new("TextLabel", MainFrame)
+local ScrollPage = Instance.new("ScrollingFrame", MainFrame)
+
+-- ปุ่มเปิด/ปิดหน้าต่างหลัก ทรงกลม และเขียนว่า "A" สีรุ้ง
+local ToggleMenuBtn = Instance.new("TextButton", ScreenGui)
+local UIStroke = Instance.new("UIStroke", ToggleMenuBtn)
+local UICorner = Instance.new("UICorner", ToggleMenuBtn)
+
+ToggleMenuBtn.Size = UDim2.new(0, 50, 0, 50)
+ToggleMenuBtn.Position = UDim2.new(0.05, 0, 0.4, 0)
+ToggleMenuBtn.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+ToggleMenuBtn.Text = "A"
+ToggleMenuBtn.TextSize = 24
+ToggleMenuBtn.Font = Enum.Font.SourceSansBold
+ToggleMenuBtn.Active = true
+MakeDraggable(ToggleMenuBtn)
+
+UICorner.CornerRadius = UDim.new(1, 0)
+UIStroke.Thickness = 2.5
+
+-- ระบบ UI สีรุ้งหมุนเวียน
+local function ApplyRainbow(object, property)
+    task.spawn(function()
+        while task.wait() do
+            local hue = (tick() % 5) / 5
+            local color = Color3.fromHSV(hue, 1, 1)
+            pcall(function() object[property] = color end)
+        end
+    end)
+end
+
+ApplyRainbow(UIStroke, "Color")
+ApplyRainbow(ToggleMenuBtn, "TextColor3")
+
+-- หน้าต่างเมนูหลัก
+MainFrame.Name = "KCombatRainbow"
+MainFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 18)
+MainFrame.Position = UDim2.new(0.35, 0, 0.15, 0)
+MainFrame.Size = UDim2.new(0, 260, 0, 420)
+MainFrame.Active = true
+MakeDraggable(MainFrame, Title)
+
+local MainStroke = Instance.new("UIStroke", MainFrame)
+MainStroke.Thickness = 2
+ApplyRainbow(MainStroke, "Color")
+
+Title.Size = UDim2.new(1, 0, 0, 40)
+Title.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+Title.Text = "K-COMBAT RE-FIXED V9"
+Title.TextSize = 15
+Title.Font = Enum.Font.SourceSansBold
+ApplyRainbow(Title, "TextColor3")
+
+ScrollPage.Size = UDim2.new(1, 0, 1, -40)
+ScrollPage.Position = UDim2.new(0, 0, 0, 40)
+ScrollPage.BackgroundTransparency = 1
+ScrollPage.CanvasSize = UDim2.new(0, 0, 0, 580)
+ScrollPage.ScrollBarThickness = 4
+ScrollPage.ScrollBarImageColor3 = Color3.fromRGB(255, 255, 255)
+
+ToggleMenuBtn.MouseButton1Click:Connect(function()
+    MainFrame.Visible = not MainFrame.Visible
+end)
+
+-- ฟังก์ชันสร้างปุ่มเปิด/ปิดภายในเมนูหลัก
+local function CreateButton(text, pos, callback)
+    local btn = Instance.new("TextButton", ScrollPage)
+    btn.Size = UDim2.new(0, 220, 0, 30)
+    btn.Position = pos
+    btn.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+    btn.Text = text .. " [ปิด]"
+    btn.TextColor3 = Color3.fromRGB(255, 100, 100)
+    btn.TextSize = 13
+    btn.Font = Enum.Font.SourceSans
+
+    local state = false  
+    btn.MouseButton1Click:Connect(function()  
+        state = not state  
+        btn.Text = text .. (state and " [เปิด]" or " [ปิด]")  
+        btn.TextColor3 = state and Color3.fromRGB(100, 255, 100) or Color3.fromRGB(255, 100, 100)  
+        callback(state)  
+    end)  
+    return btn
+end
+
+-- ระบบสไลเดอร์ภายในเมนูหลัก
+local function CreateRealSlider(text, pos, min, max, default, callback)
+    local label = Instance.new("TextLabel", ScrollPage)
+    label.Size = UDim2.new(0, 220, 0, 20)
+    label.Position = pos
+    label.BackgroundTransparency = 1
+    label.Text = text .. ": " .. tostring(default)
+    label.TextColor3 = Color3.fromRGB(220, 220, 220)
+    label.TextSize = 11
+
+    local sliderBg = Instance.new("Frame", ScrollPage)  
+    sliderBg.Size = UDim2.new(0, 220, 0, 6)  
+    sliderBg.Position = UDim2.new(pos.X.Scale, pos.X.Offset, pos.Y.Scale, pos.Y.Offset + 18)  
+    sliderBg.BackgroundColor3 = Color3.fromRGB(40, 40, 45)  
+      
+    local fill = Instance.new("Frame", sliderBg)  
+    fill.Size = UDim2.new((default - min) / (max - min), 0, 1, 0)  
+    ApplyRainbow(fill, "BackgroundColor3")  
+      
+    local sliderBtn = Instance.new("TextButton", sliderBg)  
+    sliderBtn.Size = UDim2.new(0, 12, 0, 12)  
+    sliderBtn.AnchorPoint = Vector2.new(0.5, 0.5)  
+    sliderBtn.Position = UDim2.new((default - min) / (max - min), 0, 0.5, 0)  
+    sliderBtn.BackgroundColor3 = Color3.fromRGB(255, 50, 50)  
+    sliderBtn.Text = ""  
+      
+    local corner = Instance.new("UICorner", sliderBtn)  
+    corner.CornerRadius = UDim.new(1, 0)  
+
+    local dragging = false  
+    sliderBtn.InputBegan:Connect(function(input)  
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then  
+            dragging = true  
+        end
+    end)  
+
+    UserInputService.InputEnded:Connect(function(input)  
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then  
+            dragging = false  
+        end  
+    end)  
+
+    UserInputService.InputChanged:Connect(function(input)  
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then  
+            local relativeX = input.Position.X - sliderBg.AbsolutePosition.X  
+            local percentage = math.clamp(relativeX / sliderBg.AbsoluteSize.X, 0, 1)  
+              
+            local value = math.floor(min + (max - min) * percentage)  
+            label.Text = text .. ": " .. tostring(value)  
+            fill.Size = UDim2.new(percentage, 0, 1, 0)  
+            sliderBtn.Position = UDim2.new(percentage, 0, 0.5, 0)  
+            callback(value)  
+        end  
+    end)
+end
+
+-- วาดปุ่มควบคุมเมนูหลักลง ScrollPage
+CreateButton("ระบบล็อคตัวตามศัตรู (ล็อคหัวพุ่งตาม)", UDim2.new(0, 15, 0, 15), function(v) Config.Aim = v end)
+CreateButton("ระบบล็อคตัวตามศัตรู (ล็อคตัวพุ่งตาม)", UDim2.new(0, 15, 0, 50), function(v) Config.AimTorso = v end)
+CreateRealSlider("วงล็อคศัตรู FOV (0-100)", UDim2.new(0, 15, 0, 85), 0, 100, 50, function(v) Config.FovRadius = v end)
+
+CreateButton("มองทะลุศัตรู (กล่องสี่เหลี่ยมตามตัว)", UDim2.new(0, 15, 0, 130), function(v) Config.EspBox = v end)
+CreateButton("มองทะลุศัตรู (เส้นจากขอบบนตรงกลางจอ)", UDim2.new(0, 15, 0, 165), function(v) Config.EspLine = v end)
+CreateButton("มองทะลุศัตรู (แถบแสดงหลอดเลือด)", UDim2.new(0, 15, 0, 200), function(v) Config.EspHealth = v end)
+
+CreateButton("ฟังก์ชันบินขึ้นฟ้าดิ่ง (ทะลุสิ่งของอัตโนมัติ)", UDim2.new(0, 15, 0, 245), function(v) Config.Fly = v end)
+CreateRealSlider("ระดับความสูงในการบิน (0-500 ยูนิต)", UDim2.new(0, 15, 0, 275), 0, 500, 20, function(v) Config.FlyHeight = v end)
+
+CreateButton("ทะลุสิ่งของ / ดำดินใต้แมพได้จริง", UDim2.new(0, 15, 0, 320), function(v) Config.NoClip = v end)
+CreateButton("โหมดลอยตัวนิ่งกลางอากาศใต้โลก", UDim2.new(0, 15, 0, 355), function(v) Config.Float = v end)
+
+CreateRealSlider("ความเร็วเดินเร็ว (0-100)", UDim2.new(0, 15, 0, 400), 0, 100, 16, function(v) Config.WalkSpeed = v end)
+CreateRealSlider("ความสูงกระโดดสูง (0-100)", UDim2.new(0, 15, 0, 450), 0, 100, 50, function(v) Config.JumpPower = v end)
+CreateButton("ระบบยิงอัตโนมัติ (Auto Shoot)", UDim2.new(0, 15, 0, 500), function(v) Config.AutoShoot = v end)
+CreateRealSlider("ระยะห่างเหนือหัวศัตรู (0-50)", UDim2.new(0, 15, 0, 540), 0, 50, 3, function(v) TeleportHeight = v end)
+
+-- หน้าต่างเสริมแยก (Mini Teleport Menu)
+local ExtraFrame = Instance.new("Frame", ScreenGui)
+ExtraFrame.Size = UDim2.new(0, 135, 0, 42)
+ExtraFrame.Position = UDim2.new(0.05, 0, 0.6, 0)
+ExtraFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+ExtraFrame.Active = true
+MakeDraggable(ExtraFrame) 
+
+local ExtraStroke = Instance.new("UIStroke", ExtraFrame)
+ExtraStroke.Thickness = 2
+ApplyRainbow(ExtraStroke, "Color")
+
+local TPBtn = Instance.new("TextButton", ExtraFrame)
+TPBtn.Size = UDim2.new(0, 115, 0, 24)
+TPBtn.Position = UDim2.new(0.5, 0, 0.5, 0)
+TPBtn.AnchorPoint = Vector2.new(0.5, 0.5)
+TPBtn.Text = "บินค้างบนหัวศัตรู"
+TPBtn.TextSize = 12
+TPBtn.Font = Enum.Font.SourceSansBold
+TPBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+ApplyRainbow(TPBtn, "TextColor3")
+
+TPBtn.MouseButton1Click:Connect(function()
+    IsFollowing = not IsFollowing
+    TPBtn.Text = IsFollowing and "หยุดบินตาม" or "บินค้างบนหัวศัตรู"
+    if not IsFollowing then
+        local MyHRP = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+        if MyHRP then
+            MyHRP.Anchored = false
+        end
+    end
+end)
+
+-- ปุ่มไอคอนเปิด/ปิดหน้าต่างเสริมจิ๋ว
+local MiniToggleBtn = Instance.new("TextButton", ScreenGui)
+MiniToggleBtn.Size = UDim2.new(0, 35, 0, 35) 
+MiniToggleBtn.Position = UDim2.new(0.05, 0, 0.53, 0)
+MiniToggleBtn.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+MiniToggleBtn.Text = "AS"
+MiniToggleBtn.TextSize = 14
+MiniToggleBtn.Font = Enum.Font.SourceSansBold
+MiniToggleBtn.Active = true
+MakeDraggable(MiniToggleBtn) 
+
+local MiniCorner = Instance.new("UICorner", MiniToggleBtn)
+MiniCorner.CornerRadius = UDim.new(0, 4)
+
+local MiniStroke = Instance.new("UIStroke", MiniToggleBtn)
+MiniStroke.Thickness = 1.5
+ApplyRainbow(MiniStroke, "Color")
+ApplyRainbow(MiniToggleBtn, "TextColor3")
+
+MiniToggleBtn.MouseButton1Click:Connect(function()
+    ExtraFrame.Visible = not ExtraFrame.Visible
+end)
+
+-- ตั้งค่าวงกลม FOV
+local FOVCircle = Drawing.new("Circle")
+FOVCircle.Thickness = 2
+FOVCircle.Filled = false
+ApplyRainbow(FOVCircle, "Color")
+
+local function GetClosestPlayerToCenter()
+    local Target = nil
+    local ShortestDistance = math.huge
+    local CenterScreen = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+
+    for _, v in pairs(Players:GetPlayers()) do  
+        if v ~= LocalPlayer and v.Character and v.Character:FindFirstChild("Head") and v.Character:FindFirstChild("HumanoidRootPart") and v.Character:FindFirstChild("Humanoid") and v.Character.Humanoid.Health > 0 then  
+            local Pos, OnScreen = Camera:WorldToViewportPoint(v.Character.Head.Position)  
+            if OnScreen then  
+                local Dist = (CenterScreen - Vector2.new(Pos.X, Pos.Y)).Magnitude  
+                if Dist < ShortestDistance and Dist <= (Config.FovRadius * 4) then  
+                    Target = v  
+                    ShortestDistance = Dist  
+                end  
+            end  
+        end  
+    end  
+    return Target
+end
+
+-- [ฟังก์ชันแก้ไขใหม่] ระบบส่งคำสั่งคลิกยิงตรงพิกัดเป้าเล็งกลางหน้าจอ
+local function TriggerShoot()
+    if (tick() - lastShootTime) >= 0.05 then
+        lastShootTime = tick()
+        task.spawn(function()
+            local CenterX = Camera.ViewportSize.X / 2
+            local CenterY = Camera.ViewportSize.Y / 2
+            -- ส่งพิกัดกึ่งกลางจอลงใน Input เพื่อสั่งยิงให้ตรงเป้าเล็งแบบแม่นยำ 100%
+            VirtualInputManager:SendMouseButtonEvent(CenterX, CenterY, 0, true, game, 1)
+            task.wait(0.03) -- หน่วงเวลาเล็กน้อยให้ระบบเกมรับข้อมูลทัน
+            VirtualInputManager:SendMouseButtonEvent(CenterX, CenterY, 0, false, game, 1)
+        end)
+    end
+end
+
+-- ระบบลูปควบคุม (RenderStepped & Heartbeat) 
+RunService.RenderStepped:Connect(function()
+    local CenterScreen = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+    FOVCircle.Radius = Config.FovRadius * 4
+    FOVCircle.Visible = true
+    FOVCircle.Position = CenterScreen
+
+    -- ฟังก์ชัน วาปเกาะติดศัตรู
+    if IsFollowing then
+        local function GetClosestEnemy()
+            local Target = nil
+            local ShortestDistance = math.huge
+            local MyChar = LocalPlayer.Character
+            if not MyChar then return nil end
+            local MyHRP = MyChar:FindFirstChild("HumanoidRootPart")
+            if not MyHRP then return nil end
+            local MyPos = MyHRP.Position
+
+            for _, v in pairs(Players:GetPlayers()) do
+                if v ~= LocalPlayer and v.Character and v.Character:FindFirstChild("HumanoidRootPart") and v.Character:FindFirstChild("Humanoid") then
+                    if v.Character.Humanoid.Health > 0 then
+                        if v.Team and LocalPlayer.Team and v.Team == LocalPlayer.Team then
+                            continue
+                        end
+                        
+                        local Dist = (v.Character.HumanoidRootPart.Position - MyPos).Magnitude
+                        if Dist < ShortestDistance then
+                            Target = v
+                            ShortestDistance = Dist
+                        end
+                    end
+                end
+            end
+            return Target
+        end
+
+        if not TargetPlayer or not TargetPlayer.Character or not TargetPlayer.Character:FindFirstChild("Humanoid") or TargetPlayer.Character.Humanoid.Health <= 0 or not TargetPlayer.Parent then
+            TargetPlayer = GetClosestEnemy()
+        end
+
+        if TargetPlayer and TargetPlayer.Character and TargetPlayer.Character:FindFirstChild("Head") then
+            local MyChar = LocalPlayer.Character
+            if MyChar then
+                local MyHRP = MyChar:FindFirstChild("HumanoidRootPart")
+                if MyHRP then
+                    for _, part in pairs(MyChar:GetChildren()) do
+                        if part:IsA("BasePart") then part.CanCollide = false end
+                    end
+                    MyHRP.CFrame = TargetPlayer.Character.Head.CFrame + Vector3.new(0, TeleportHeight, 0)
+                    MyHRP.Velocity = Vector3.new(0, 0, 0)
+                    
+                    -- เรียกใช้ฟังก์ชันยิงอัตโนมัติที่ได้รับการแก้ไขแล้วเมื่อบินค้าง
+                    if Config.AutoShoot then
+                        TriggerShoot()
+                    end
+                end
+            end
+        else
+            TargetPlayer = nil
+        end
+    end
+
+    -- ฟังก์ชัน Aim ปกติของเมนูหลัก
+    if (Config.Aim or Config.AimTorso) and not IsFollowing then  
+        local Target = GetClosestPlayerToCenter()  
+        if Target and Target.Character then  
+            local MyHRP = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")  
+            if MyHRP then  
+                local LockPart = nil  
+                if Config.Aim and Target.Character:FindFirstChild("Head") then  
+                    LockPart = Target.Character.Head  
+                elseif Config.AimTorso and Target.Character:FindFirstChild("HumanoidRootPart") then  
+                    LockPart = Target.Character.HumanoidRootPart  
+                end  
+                  
+                if LockPart then  
+                    Camera.CFrame = CFrame.new(Camera.CFrame.Position, LockPart.Position)  
+                    MyHRP.CFrame = CFrame.new(MyHRP.Position, Vector3.new(LockPart.Position.X, MyHRP.Position.Y, LockPart.Position.Z))  
+                    
+                    -- เรียกใช้ฟังก์ชันยิงอัตโนมัติที่แก้ไขแล้วเมื่อ Aim ล็อคเป้าหมายเรียบร้อย
+                    if Config.AutoShoot then  
+                        TriggerShoot()
+                    end  
+                end  
+            end  
+        end  
+    end  
+      
+    -- วาดภาพ ESP
+    for player, drawings in pairs(ESPCache) do  
+        if player and player.Parent and player.Character and player.Character:FindFirstChild("HumanoidRootPart") and player.Character:FindFirstChild("Head") and player.Character:FindFirstChild("Humanoid") and player.Character.Humanoid.Health > 0 then  
+            local Char = player.Character  
+            local HRP = Char.HumanoidRootPart  
+            local Head = Char.Head  
+            local Hum = Char.Humanoid  
+              
+            local HeadCFrame = Head.CFrame  
+            local TopPos, TopOnScreen = Camera:WorldToViewportPoint(HeadCFrame.Position + Vector3.new(0, 1.2, 0))  
+            local BottomPos, BottomOnScreen = Camera:WorldToViewportPoint(HRP.Position - Vector3.new(0, 3, 0))  
+              
+            local hue = (tick() % 5) / 5  
+            local rainbowColor = Color3.fromHSV(hue, 1, 1)  
+              
+            if TopOnScreen and BottomOnScreen then  
+                local BoxHeight = math.abs(TopPos.Y - BottomPos.Y)  
+                local BoxWidth = BoxHeight * 0.65  
+                local BoxX = TopPos.X - (BoxWidth / 2)  
+                local BoxY = TopPos.Y  
+                  
+                if Config.EspBox then  
+                    drawings.Box.Size = Vector2.new(BoxWidth, BoxHeight)  
+                    drawings.Box.Position = Vector2.new(BoxX, BoxY)  
+                    drawings.Box.Color = rainbowColor  
+                    drawings.Box.Visible = true  
+                else  
+                    drawings.Box.Visible = false  
+                end  
+                  
+                if Config.EspHealth then  
+                    drawings.HealthBg.From = Vector2.new(BoxX - 5, BoxY)  
+                    drawings.HealthBg.To = Vector2.new(BoxX - 5, BoxY + BoxHeight)  
+                    drawings.HealthBg.Visible = true  
+                      
+                    local healthPercentage = math.clamp(Hum.Health / Hum.MaxHealth, 0, 1)  
+                    drawings.HealthLine.From = Vector2.new(BoxX - 5, BoxY + BoxHeight)  
+                    drawings.HealthLine.To = Vector2.new(BoxX - 5, BoxY + BoxHeight - (BoxHeight * healthPercentage))  
+                    drawings.HealthLine.Visible = true  
+                else  
+                    drawings.HealthBg.Visible = false  
+                    drawings.HealthLine.Visible = false  
+                end  
+                  
+                if Config.EspLine then  
+                    local HeadPos, HeadOnScreen = Camera:WorldToViewportPoint(Head.Position)  
+                    if HeadOnScreen then  
+                        drawings.Line.From = Vector2.new(Camera.ViewportSize.X / 2, 0)  
+                        drawings.Line.To = Vector2.new(HeadPos.X, HeadPos.Y)  
+                        drawings.Line.Color = rainbowColor  
+                        drawings.Line.Visible = true  
+                    else  
+                        drawings.Line.Visible = false  
+                    end  
+                else  
+                    drawings.Line.Visible = false  
+                end  
+            else  
+                drawings.Box.Visible = false  
+                drawings.HealthBg.Visible = false  
+                drawings.HealthLine.Visible = false  
+                drawings.Line.Visible = false  
+            end  
+        else  
+            drawings.Box.Visible = false  
+            drawings.HealthBg.Visible = false  
+            drawings.HealthLine.Visible = false  
+            drawings.Line.Visible = false  
+        end  
+    end
+end)
+
+-- ระบบจัดการสร้างและลบสารบัญข้อมูล ESP
+local function CreateESP(player)
+    if ESPCache[player] then return end
+    local box = Drawing.new("Square")  
+    box.Thickness = 2  
+    box.Filled = false  
+    box.Visible = false  
+    local healthBg = Drawing.new("Line")  
+    healthBg.Thickness = 2  
+    healthBg.Color = Color3.fromRGB(50, 0, 0)  
+    healthBg.Visible = false  
+    local healthLine = Drawing.new("Line")  
+    healthLine.Thickness = 2  
+    healthLine.Color = Color3.fromRGB(0, 255, 0)  
+    healthLine.Visible = false  
+    local line = Drawing.new("Line")  
+    line.Thickness = 2  
+    line.Visible = false  
+    ESPCache[player] = {Box = box, HealthBg = healthBg, HealthLine = healthLine, Line = line}
+end
+
+local function RemoveESP(player)
+    if ESPCache[player] then
+        for _, drawing in pairs(ESPCache[player]) do
+            drawing.Visible = false
+            drawing:Delete()
+        end
+        ESPCache[player] = nil
+    end
+end
+
+Players.PlayerAdded:Connect(CreateESP)
+Players.PlayerRemoving:Connect(RemoveESP)
+for _, p in pairs(Players:GetPlayers()) do
+    if p ~= LocalPlayer then CreateESP(p) end
+end
+
+-- ลูปฟิสิกส์สำหรับเคลื่อนที่ / บินของตัวละคร (Heartbeat)
+local FlyInstance = nil
+RunService.Heartbeat:Connect(function()
+    local Char = LocalPlayer.Character
+    if Char and Char:FindFirstChild("HumanoidRootPart") and Char:FindFirstChild("Humanoid") then
+        local HRP = Char.HumanoidRootPart
+        local Hum = Char.Humanoid
+
+        Hum.WalkSpeed = Config.WalkSpeed  
+        Hum.JumpPower = Config.JumpPower  
+        Hum.UseJumpPower = true  
+          
+        if Config.Fly then  
+            Hum.PlatformStand = true  
+            if not FlyInstance or FlyInstance.Parent ~= HRP then  
+                if HRP:FindFirstChild("FlyPosition") then HRP.FlyPosition:Destroy() end  
+                FlyInstance = Instance.new("BodyPosition", HRP)  
+                FlyInstance.Name = "FlyPosition"  
+                FlyInstance.MaxForce = Vector3.new(0, math.huge, 0)  
+            end  
+            FlyInstance.Position = Vector3.new(HRP.Position.X, Config.FlyHeight, HRP.Position.Z)  
+        else  
+            if FlyInstance then   
+                FlyInstance:Destroy()   
+                FlyInstance = nil   
+                Hum.PlatformStand = false  
+                Hum:ChangeState(Enum.HumanoidStateType.GettingUp)  
+            end  
+        end  
+          
+        if Config.Fly or Config.NoClip or Config.Float or IsFollowing then  
+            Hum:ChangeState(Enum.HumanoidStateType.Physics)  
+            for _, part in pairs(Char:GetChildren()) do  
+                if part:IsA("BasePart") then  
+                    part.CanCollide = false  
+                end  
+            end  
+            if Config.Float then  
+                HRP.Velocity = Vector3.new(HRP.Velocity.X, 0, HRP.Velocity.Z)  
+            end  
+        else  
+            for _, part in pairs(Char:GetChildren()) do  
+                if part:IsA("BasePart") then  
+                    part.CanCollide = true  
+                end  
+            end  
+            if Hum.PlatformStand and not Config.Float and not Config.NoClip then  
+                Hum.PlatformStand = false  
+            end  
+        end  
+    end
+end)
